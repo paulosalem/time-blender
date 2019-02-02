@@ -1,0 +1,19 @@
+#!/usr/bin/env python
+
+import warnings
+warnings.filterwarnings("ignore", module='h5py')
+
+
+# main application file, for command-line use instead of as a lib
+import os
+import sys
+sys.path.append(os.getcwd())
+
+import time_blender.models as models
+import time_blender.cli as cli
+from clize import run
+
+if __name__ == '__main__':
+    cli.using_cli = True
+    run(models.ClassicModels.ar, models.ClassicModels.ma, models.ClassicModels.arma,
+        models.BankingModels.salary_earner, models.SimpleModels.cycle)
