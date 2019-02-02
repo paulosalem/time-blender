@@ -1,5 +1,5 @@
 # TimeBlender
-A compositional time series generator.
+A programmatic and compositional time series generator.
 
 
 ## Introduction
