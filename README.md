@@ -78,7 +78,7 @@ pip install time-blender
 
 It can also be installed directly from GitHub:
 ```bash
-pip install git+https://github.com/paulosalem/time_blender#egg=time-blender
+pip install git+https://github.com/paulosalem/time-blender#egg=time-blender
 ```
 
 ## Use
@@ -108,7 +108,7 @@ deviation 1:
   
   data = Generator(model).generate(pd.Timestamp(2018, 1, 1),  pd.Timestamp(2018, 31, 1), n=1)
   
-  # data[0] contains the generates series.
+  # data[0] contains the generated series.
 ```
 
 Some models are predefined for convenience. For instance, a random ARMA(4, 2) model can be defined as:
@@ -119,7 +119,7 @@ Some models are predefined for convenience. For instance, a random ARMA(4, 2) mo
   model = ClassicModels.arma(4, 2)
   data = Generator(model).generate(pd.Timestamp(2018, 1, 1),  pd.Timestamp(2018, 31, 1), n=1)
   
-  # data[0] contains the generates series.
+  # data[0] contains the generated series.
 
 ```
 
