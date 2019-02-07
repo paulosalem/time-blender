@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 
-pip install git+https://github.com/paulosalem/time_blender#egg=time_blender
+pip install --upgrade git+https://github.com/paulosalem/time-blender#egg=time-blender

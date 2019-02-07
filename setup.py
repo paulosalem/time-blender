@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(name='time-blender',
       version='0.1.2',
@@ -7,7 +7,7 @@ setup(name='time-blender',
       author='Paulo Salem',
       author_email='paulosalem@paulosalem.com',
       license='MIT',
-      packages=['time_blender'],
+      packages=find_packages(),
       classifiers=[
             "Programming Language :: Python :: 3",
             "License :: OSI Approved :: MIT License",
