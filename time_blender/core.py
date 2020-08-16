@@ -1,28 +1,53 @@
 import logging
 import random
+import copy
 
+import numpy as np
 import pandas as pd
+import functools
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+import hyperopt
+from joblib import Parallel, delayed
 
 from time_blender.util import fresh_id
 
-import pymc3 as pm
+
+###############################################################################
+# Auxiliary functions.
+###############################################################################
+def wrapped_constant_param(prefix, name, value, **kwargs):
+    """
+    Wraps the specified value as a ConstantEvent if it is numeric and not already an event.
+
+    :param prefix: A prefix for the name of the event.
+    :param name: The name of the event.
+    :param value: The value to be wrapped.
+    :param kwargs: Additional aruments to pass to ConstantEvent's constructor.
+    :return: The wrapped value.
+    """
+    if not isinstance(value, Event):
+        if isinstance(value, int) or isinstance(value, float):
+            value = ConstantEvent(value, name=f'{prefix}_{name}', **kwargs)
+
+    return value
 
 
+###############################################################################
+# Core event classes
+###############################################################################
 class Event:
 
     def __init__(self, name=None, parallel_events=None, push_down=False):
-        self.name = name
+        self.name = self._default_name_if_none(name)
 
         self._indexed_generated_values = {} # time to value
         self._generated_values = [] # sequence of values
         self._last_pos = -1
 
         # determine which attributes are causal events
-        self._causal_parameters = []
-        for k, v in self.__dict__.items():
-            if isinstance(v, Event):
-                self._causal_parameters.append(v)
+        self._init_causal_parameters()
 
+        # set parallel events
         if parallel_events is not None:
             self.parallel_events = []
             self.parallel_to(parallel_events)
@@ -33,13 +58,45 @@ class Event:
 
         self._execution_locked = False
 
-    def execute(self, t):
+        #
+        # random variables after sampling
+        #
+        self.distribution_sample = []  # TODO obsolete?
+
+    def _init_causal_parameters(self):
+        self._causal_parameters = []
+        for k, v in self.__dict__.items():
+            # events might be given as attributes
+            if isinstance(v, Event):
+                self._causal_parameters.append(v)
+
+            # events might be stored in lists
+            elif isinstance(v, list) and k != '_causal_parameters':  # the key verification avoids an infinite loop
+                for element in v:
+                    if isinstance(element, Event):
+                        self._causal_parameters.append(element)
+
+    def _wrapped_param(self, prefix, name, value, **kwargs):
+        return wrapped_constant_param(prefix=prefix, name=name, value=value, **kwargs)
+
+    def _causal_parameters_closure(self):
+        closure = []
+        for event in self._causal_parameters:
+            closure.append(event)
+            closure = closure + event._causal_parameters_closure()
+
+        return closure
+
+    def execute(self, t, obs=None):
         """
         Executes the event and generates an output for the present moment.
 
+        :param obs:
         :param t: The time in which the event takes place.
         :return: The scalar value of the event in the specified moment.
         """
+
+        # TODO check obs parameters validity?
 
         if not self._execution_locked:
             self._execution_locked = True
@@ -47,13 +104,19 @@ class Event:
             # update parallel events
             if self.parallel_events is not None:
                 for e in self.parallel_events:
-                    e.execute(t)
+                    e.execute(t, obs=obs)
 
             # process this event
             if t not in self._indexed_generated_values:
                 self._last_pos += 1
+
+                # should we use previously recorded (learned) values or re-execute?
+                if self._should_use_learned_sample():
+                    v = self.sample_from_learned_distribution()
+                else:
+                    v = self._execute(t, self._last_pos, obs=obs)
+
                 # save the value for future reference and to avoid recomputing
-                v = self._execute(t, self._last_pos)
                 self._indexed_generated_values[t] = v
                 self._generated_values.append(v)
 
@@ -69,7 +132,7 @@ class Event:
         else:
             return None
 
-    def _execute(self, t, i):
+    def _execute(self, t, i, obs=None):
         raise NotImplementedError("Must be implemented by concrete subclasses.")
 
     def _push_down(self, t, parent_value):
@@ -101,11 +164,20 @@ class Event:
         """
         pass
 
-    def _value_or_execute_if_event(self, x, t):
+    def _value_or_execute_if_event(self, var_name, x, t,  obs=None):
         if isinstance(x, Event):
-            return x.execute(t)
-        else:
+            return x.execute(t, obs=obs)
+
+        else:  # it is a scalar value
             return x
+
+    def _temporal_name(self, t):
+        """
+        Returns the event's name augmented with the specified instant.
+        :param t:
+        :return:
+        """
+        return f'{self.name}_t{t}'
 
     def parallel_to(self, events):
         if self.parallel_events is None:
@@ -152,38 +224,15 @@ class Event:
 
             self._execution_locked = False
 
-    def _pymc3_model_variables(self, model, observations=None):
-        found_random_event = False
-        for event in self._causal_parameters:
-            if not found_random_event:
-                event._pymc3_model_variables(model, observations)
-                if isinstance(event, RandomEvent):
-                    found_random_event = True
-            else:
-                # There can be only one root RandomEvent because observations must be related to exactly one
-                # event in the causal graph.
-                raise ValueError("There can be only one root random event (all other random events must be causally \
-                                  linked to it)")
-
-    def _pymc3_push_distributions_down(self, trace):
-        for event in self._causal_parameters:
-            event._pymc3_push_distributions_down(trace)
-
-    def generalize_from_observations(self, observations):
-        """
-        Given various observations, learn the model parameters that best fit them.
-
-        :param observations: A sequence observations. E.g., [1, 0, 1, 0, 1, 1].
-        :return:
-        """
-        raise NotImplementedError("Only random events can be subject to learning.")
-
     def is_root_cause(self):
         """
         Checks whether this event depend on any other or not (i.e., it is a root cause).
         :return: True if no dependecies exist; False otherwise.
         """
         return len(self._causal_parameters) == 0
+
+    def __str__(self):
+        return self.name
 
     def __add__(self, other):
             return LambdaEvent(lambda t, i, mem: self.execute(t) + other.execute(t), sub_events=[other])
@@ -197,51 +246,141 @@ class Event:
     def __truediv__(self, other):
         return LambdaEvent(lambda t, i, mem: self.execute(t) / other.execute(t), sub_events=[other])
 
+    def _push_constants_down(self, scalar_values):
+        """
+        Recursively attributes the constants named in the specified dictionary to the appropriate events.
 
-class RandomEvent(Event):
-
-    def __init__(self, pymc3_distribution_func, name=None, parallel_events=None, push_down=False):
-        self.pymc3_distribution_func = pymc3_distribution_func
-        self.distribution_sample = []
-        super().__init__(name, parallel_events, push_down)
-
-    def _pymc3_model_variables(self, model, observations=None):
-        return self.pymc3_distribution_func(model, observations)
-
-    @staticmethod
-    def _pymc3_model_variables_if_distribution(model, x, observations=None):
-        if isinstance(x, RandomEvent):
-            return x._pymc3_model_variables(model, observations)
-        elif isinstance(x, Event):
-            raise ValueError("Only random events or scalars are allowed.")
-        else:
-            return x
-
-    def _pymc3_push_distributions_down(self, trace):
+        :param scalar_values: A dict with the named values.
+        :return:
+        """
         try:
-            self.distribution_sample = trace[self.name]
+            for event in self._causal_parameters:
+                if isinstance(event, ConstantEvent):
+                    name = event.name
+                    if name in scalar_values:
+                        event.constant = scalar_values[name]
+
         except KeyError as err:
             logging.debug(err)
 
-        super()._pymc3_push_distributions_down(trace)
+        for event in self._causal_parameters:
+            event._push_constants_down(scalar_values)
 
-    def generalize_from_observations(self, observations):
+    def generalize_from_observations(self, observed_traces,
+                                     n_simulations=20, max_optimization_evals=300,
+                                     upper_bound=20, lower_bound=-20,
+                                     error_strategy='best_trace'):
         """
         Given various observations, learn the model parameters that best fit them.
 
-        :param observations: A sequence observations. E.g., [1, 0, 1, 0, 1, 1].
+        :param observed_traces: A sequence of sequences of observations. E.g., [[1, 0, 1, 0, 1, 1], [1, 1, 0], ...].
+        :param n_simulations: How many simulations per observed trace are to be performed when calculating the error.
+        :param max_optimization_evals: How many passes to perform on the optimization procedure.
+        :param lower_bound: If not otherwise given, this will be the lower bound of parameters being optimized.
+        :param upper_bound: If not otherwise given, this will be the upper bound of parameters being optimized.
+        :param error_strategy: The calculation strategy to use for the error function.
+                               'best_trace' indicates that the error will consider the best trace only, ignoring
+                               the others;
+                               'all_traces' indicates that all traces will be considered equally.
         :return:
         """
-        model = pm.Model()
-        with model:
-            self._pymc3_model_variables(model, observations)
+        def error(y_true, y_pred):
+            #return mean_squared_error(y_pred=y_pred, y_true=y_true)
+            return mean_absolute_error(y_pred=y_pred, y_true=y_true)
+        
+        # objective function for black box optimization
+        def aux_objective_function(args):
+            # Change the constant parameters
+            self._push_constants_down(args)
 
-            # Calculate a posteriori distribution from observations
-            step = pm.Metropolis()
-            self.trace = pm.sample(10000, tune=5000, step=step) # TODO customize parameters and algorithm
+            #
+            # Consider each observed trace in order to calculate the error. We'll do this in parallel.
+            #
 
-            # propagate the new distributions down
-            self._pymc3_push_distributions_down(self.trace)
+            # The function to run in parallel over each trace. It returns the error over that trace w.r.t. current
+            # simulation parameters.
+            def aux_trace_error(trace):
+                #
+                # calculate dates and temporal lengths
+                #
+                n_steps = len(trace)
+                start_date = pd.Timestamp.today()
+                end_date = start_date + pd.offsets.Day(n_steps)
+                n_obs = len(trace)
+
+                #
+                # run simulation a few times
+                #
+                generator = Generator(self)
+                sim_outputs = []
+                ###trace_diffs = []
+                for i in range(0, n_simulations):
+                    res = generator.generate(start_date=start_date, end_date=end_date)
+                    sim_outputs.append(res[0].values[:n_obs, :])
+
+                #
+                # calculate error in relation to observations
+                #
+
+                sim_outputs_flattened = functools.reduce(lambda x, y: np.concatenate([x, y],
+                                                                                     axis=None),
+                                                         sim_outputs)
+                trace_copies_flattened = np.concatenate([trace for i in range(0, len(sim_outputs))], axis=None)
+
+                return error(trace_copies_flattened, sim_outputs_flattened)
+
+            # Call the trace processing function in parallel. n_jobs=-2 means that all CPUs minus one are used.
+            errors = Parallel(n_jobs=-2)(delayed(aux_trace_error)(trace) for trace in observed_traces)
+
+            # decide how to compute the final error. Focus on specific traces or consider all of them?
+            if error_strategy == 'best_trace':
+                err = min(errors)  # selects the error w.r.t. the best trace
+            elif error_strategy == 'all_traces':
+                err = np.mean(errors)
+            else:
+                raise ValueError(f"Invalid error_strategy: {error_strategy}.")
+
+            return err
+
+        params = self._causal_parameters_closure()
+        for p in params:
+            print(p)
+
+        # define parameter search space
+        space = {}
+        for param in params:
+            if isinstance(param, ConstantEvent):
+                # check upper bound
+                if param.require_upper_bound is not None:
+                    ub = param.require_upper_bound
+                    #print(f"Upper bound constraint found: {ub}")
+                else:
+                    ub = upper_bound
+
+                # check positivity constraint
+                if param.require_lower_bound is not None:
+                    lb = param.require_lower_bound
+                    #print(f"Lower bound constraint found: {lb}")
+                else:
+                    lb = lower_bound
+
+                space[param.name] = hyperopt.hp.uniform(param.name, lb, ub)
+
+        print(space)
+
+        # optimize
+        trials = hyperopt.Trials()
+        best = hyperopt.fmin(aux_objective_function, space, algo=hyperopt.tpe.suggest,
+                             max_evals=max_optimization_evals, trials=trials)
+        #   hyperopt.tpe.suggest
+        #   hyperopt.anneal.suggest
+        #   hyperopt.atpe.suggest
+        #   hyperopt.rand.suggest
+
+        print(best)
+
+        # propagate the learned parameters down
+        self._push_constants_down(best)
 
     def sample_from_learned_distribution(self):
         """
@@ -253,9 +392,6 @@ class RandomEvent(Event):
 
         return random.choice(self.distribution_sample)
 
-    def sample_from_definition(self, t):
-        raise NotImplementedError("Must be implemented by concrete subclasses.")
-
     def has_learned(self):
         """
         Checks whether this event has been subject to learning from data.
@@ -264,27 +400,88 @@ class RandomEvent(Event):
         return len(self.distribution_sample) > 0
 
     def _should_use_learned_sample(self):
-        return self.is_root_cause() and self.has_learned()
+        return self.is_root_cause() and self.has_learned() # TODO insist in root cause?
 
-    def _execute(self, t, i):
-        if self._should_use_learned_sample():
-            return self.sample_from_learned_distribution()
-        else:
-            return self.sample_from_definition(t)
+    def clone(self):
+        """
+        Produces a copy of the present object, ensuring that elements that must be unique or shared are indeed so.
+
+        :return: A clone of the object.
+        """
+
+        # custom implementation of __deepcopy__ ensure that names are actually unique, among other details.
+        return copy.deepcopy(self)
+
+    def _fix_copy(self, c):
+        # adjust elements that must be unique or have references preserved
+        c.name = f"{self.name}_clone-{str(fresh_id())}"
+        c.parallel_events = self.parallel_events
+
+        return c
+
+    def __copy__(self):
+        # adapted from
+        # https://stackoverflow.com/questions/1500718/how-to-override-the-copy-deepcopy-operations-for-a-python-object
+
+        cls = self.__class__
+        result = cls.__new__(cls)
+        result.__dict__.update(self.__dict__)
+
+        self._fix_copy(result)
+
+        return result
+
+    def __deepcopy__(self, memo):
+        # adapted from
+        # https://stackoverflow.com/questions/1500718/how-to-override-the-copy-deepcopy-operations-for-a-python-object
+
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in self.__dict__.items():
+            setattr(result, k, copy.deepcopy(v, memo))
+
+        self._fix_copy(result)
+        return result
+
+
+class ConstantEvent(Event):
+    def __init__(self, constant, require_lower_bound=None, require_upper_bound=None,
+                 name=None, parallel_events=None, push_down=False):
+
+        super().__init__(name, parallel_events, push_down)
+        self.constant = constant
+        self.require_lower_bound = require_lower_bound
+        self.require_upper_bound = require_upper_bound
+
+        self._check_constraints()
+
+    def _execute(self, t, i, obs=None):
+        self._check_constraints()
+        return self._value_or_execute_if_event('constant', self.constant, t)
+
+    def _check_constraints(self):
+        if (self.require_lower_bound is not None) and (self.constant < self.require_lower_bound):
+            raise Exception(f"Constraint violation: constant must be positive, but was {self.constant}.")
+
+        if (self.require_upper_bound is not None) and (self.constant > self.require_upper_bound):
+            raise Exception(f"Constraint violation: constant must be less than or equal to the upper bound "
+                            f"{self.require_upper_bound}, but was {self.constant}.")
 
 
 class LambdaEvent(Event):
 
-    def __init__(self, func, sub_events=[], name=None, parallel_events=None, push_down=False):
+    def __init__(self, func, sub_events=None, name=None, parallel_events=None, push_down=False):
         super().__init__(name, parallel_events, push_down)
         self.func = func
         self.memory = {}
 
-        for se in sub_events:
-            if isinstance(se, Event):
-                self._causal_parameters.append(se)
+        if sub_events is not None:
+            for se in sub_events:
+                if isinstance(se, Event):
+                    self._causal_parameters.append(se)
 
-    def _execute(self, t, i):
+    def _execute(self, t, i, obs=None):
         return self.func(t, i, self.memory)
 
     def reset(self):

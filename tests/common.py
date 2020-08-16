@@ -2,6 +2,7 @@ import unittest
 import pandas as pd
 import numpy as np
 import math
+import random
 
 from time_blender.core import Generator
 
@@ -14,7 +15,7 @@ class AbstractTest(unittest.TestCase):
         idx_true = pd.date_range(self.start_date, self.end_date, freq='D')
 
         df = data[0]
-        self.assertEquals(len(df), len(idx_true))
+        self.assertEqual(len(df), len(idx_true))
         if print_data:
             print(df)
 
@@ -23,6 +24,10 @@ class AbstractTest(unittest.TestCase):
     def setUp(self):
         self.start_date = '2016-01-01'
         self.end_date = '2018-10-01'
+
+        # set random seeds for consistent results
+        np.random.seed(3)
+        random.seed(3)
 
     def assertClose(self, a, b, rel_tol=0.1, abs_tol=0.0, verbose=True):
         if verbose:
@@ -34,5 +39,5 @@ class AbstractTest(unittest.TestCase):
         data = generator.generate(start_date, end_date)
         values = data[0].values
 
-        fresh_event.generalize_from_observations(values)
+        fresh_event.generalize_from_observations([values], max_optimization_evals=60)
         return Generator(fresh_event).generate(start_date, end_date)[0].values

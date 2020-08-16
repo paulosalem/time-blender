@@ -1,91 +1,89 @@
-from time_blender.core import RandomEvent
 import numpy as np
-import pymc3 as pm
 
+from time_blender.core import Event
+from scipy.stats import norm, poisson, uniform
 
-class UniformEvent(RandomEvent):
+class UniformEvent(Event):
 
     def __init__(self, low=-1.0, high=1.0, name=None, parallel_events=None, push_down=False):
         name = self._default_name_if_none(name)
-        self.low = low
-        self.high = high
+        self.low = self._wrapped_param(name, 'low', low)
+        self.high = self._wrapped_param(name, 'high', high)
 
-        super().__init__(lambda model, obs: pm.Uniform(self.name,
-                                                       lower=self._pymc3_model_variables_if_distribution(model, low),
-                                                       upper=self._pymc3_model_variables_if_distribution(model, high),
-                                                       observed=obs),
-                         name, parallel_events, push_down)
+        super().__init__(name, parallel_events, push_down)
 
-    def sample_from_definition(self, t):
-        return np.random.uniform(self._value_or_execute_if_event(self.low, t),
-                                 self._value_or_execute_if_event(self.high, t))
+    def _execute(self, t, i, obs=None):
+        l = self._value_or_execute_if_event('low', self.low, t)
+        h = self._value_or_execute_if_event('high', self.high, t)
+
+        return uniform.rvs(loc=l, scale=max(0, h-l))
 
 
-class NormalEvent(RandomEvent):
+class NormalEvent(Event):
 
     def __init__(self, mean, std, name=None, parallel_events=None, push_down=False):
         name = self._default_name_if_none(name)
-        self.mean = mean
-        self.std = std
+        self.mean = self._wrapped_param(name, 'mean', mean)
+        self.std = self._wrapped_param(name, 'std', std, require_lower_bound=0.0)
 
-        super().__init__(lambda model, obs: pm.Normal(self.name,
-                                                      mu=self._pymc3_model_variables_if_distribution(model, mean),
-                                                      sd=self._pymc3_model_variables_if_distribution(model, std),
-                                                      observed=obs),
-                         name, parallel_events, push_down)
+        super().__init__(name, parallel_events, push_down)
 
-    def sample_from_definition(self, t):
-        return np.random.normal(self._value_or_execute_if_event(self.mean, t),
-                                self._value_or_execute_if_event(self.std, t))
+    def _execute(self, t, i, obs=None):
+        loc = self._value_or_execute_if_event('mean', self.mean, t)
+        scale = self._value_or_execute_if_event('std', self.std, t)
+
+        v = norm.rvs(loc=loc, scale=scale)
+        return v
 
 
-class PoissonEvent(RandomEvent):
+class PoissonEvent(Event):
 
     def __init__(self, lamb, name=None, parallel_events=None, push_down=False):
         name = self._default_name_if_none(name)
-        self.lamb = lamb
+        self.lamb = self._wrapped_param(name, 'lamb', lamb, require_lower_bound=0.0)
 
-        super().__init__(lambda model, obs: pm.Poisson(self.name,
-                                                       mu=self._pymc3_model_variables_if_distribution(model, lamb),
-                                                       observed=obs),
-                         name, parallel_events, push_down)
+        super().__init__(name, parallel_events, push_down)
 
-    def sample_from_definition(self, t):
-        return np.random.poisson(self._value_or_execute_if_event(self.lamb, t))
+    def _execute(self, t, i, obs=None):
+        l = self._value_or_execute_if_event('lamb', self.lamb, t)
+        return poisson.rvs(mu=l)
 
 
-class Resistance(RandomEvent):
+class Resistance(Event):
 
     def __init__(self, event, resistance_value_begin, resistance_value_end,
                  resistance_probability, resistance_strength_event, direction, name=None, parallel_events=None,
                  push_down=False):
+        name = self._default_name_if_none(name)
 
         self.event = event
-        self.resistance_value_begin = resistance_value_begin
-        self.resistance_value_end = resistance_value_end
-        self.resistance_probability = resistance_probability
-        self.resistance_strength_event = resistance_strength_event
+        self.resistance_value_begin = self._wrapped_param(name, 'resistance_value_begin', resistance_value_begin)
+        self.resistance_value_end = self._wrapped_param(name, 'resistance_value_end', resistance_value_end)
+        self.resistance_probability = self._wrapped_param(name, 'resistance_probability',
+                                                          resistance_probability,
+                                                          require_lower_bound=0.0, require_upper_bound=1.0)
+        self.resistance_strength_event = self._wrapped_param(name, 'resistance_strength_event',
+                                                             resistance_strength_event,
+                                                             require_lower_bound=0.0, require_upper_bound=1.0)
         self.direction = direction
 
-        def aux(model, obs):
-            raise NotImplementedError("Not supported.")
+        super().__init__(name, parallel_events, push_down)
 
-        super().__init__(aux,
-                         name, parallel_events, push_down)
-
-    def sample_from_definition(self, t):
+    def _execute(self, t, i, obs=None):
         value = self.event.execute(t)
 
         # Decide whether to resist
+        rand_top = uniform.rvs() # [0, 1]
+        rand_bottom = uniform.rvs() # [0, 1]
         if self.direction == 'top' and \
-           self.resistance_value_begin <= value < self.resistance_value_end and \
-           self.resistance_probability > np.random.random():
+           self.resistance_value_begin.constant <= value < self.resistance_value_end.constant and \
+           self.resistance_probability.constant > rand_top:
 
                 resist = True
 
         elif self.direction == 'bottom' and \
-             self.resistance_value_end < value <= self.resistance_value_begin and \
-             self.resistance_probability > np.random.random():
+             self.resistance_value_end.constant < value <= self.resistance_value_begin.constant and \
+             self.resistance_probability.constant > rand_bottom:
 
                 resist = True
         else:

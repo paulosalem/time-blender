@@ -2,8 +2,8 @@ import unittest
 import pandas as pd
 
 from time_blender.coordination_events import Once, Choice
-from time_blender.core import Generator, LambdaEvent
-from time_blender.deterministic_events import WalkEvent, WaveEvent, ConstantEvent
+from time_blender.core import Generator, LambdaEvent, ConstantEvent
+from time_blender.deterministic_events import WalkEvent, WaveEvent
 from time_blender.random_events import NormalEvent, UniformEvent
 
 

@@ -1,4 +1,7 @@
 import unittest
+import math
+import pandas as pd
+pd.set_option('display.max_rows', None)
 
 from tests.common import AbstractTest
 from time_blender.models import ClassicModels, BankingModels, SimpleModels, EconomicModels, EcologyModels
@@ -16,7 +19,17 @@ class ModelsTest(AbstractTest):
         self.common_model_test(ClassicModels.arma(p=3, q=3))
 
     def test_salary_earner(self):
-        self.common_model_test(BankingModels.salary_earner())
+
+        s = self.common_model_test(BankingModels.salary_earner(salary=5000, payment_day=1))[0].iloc[:, 0]
+        s = s.diff()
+        s.iloc[0] = 5000.0  # we must add an extra salary because the diff operation removed the first one
+
+        n_months = len(s.resample('MS').sum())
+        n_salaries = len(s[s == 5000])
+        print(n_months, n_salaries)
+
+        # the number of salaries payed must be equal to the number of months considered
+        self.assertEqual(n_months, n_salaries)
 
     def test_cycle(self):
         self.common_model_test(SimpleModels.cycle())

@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 
 from time_blender.coordination_events import PastEvent
-from time_blender.core import LambdaEvent
-from time_blender.deterministic_events import ConstantEvent, WaveEvent, ClockEvent, WalkEvent, IdentityEvent, ClipEvent
+from time_blender.core import LambdaEvent, ConstantEvent, wrapped_constant_param
+from time_blender.deterministic_events import WaveEvent, ClockEvent, WalkEvent, IdentityEvent, ClipEvent
 from time_blender.random_events import NormalEvent
 
 from clize import Parameter
@@ -190,22 +190,37 @@ class BankingModels:
 
     @staticmethod
     @cli_model
-    def salary_earner(salary: float=5000, payment_day: int=1, *, expense_mean: float=100.0, expense_sd: float=400.0):
+    def salary_earner(salary=5000, payment_day: int=1, *, expense_mean=100.0, expense_sd=300.0):
 
-        daily_normal_expense = NormalEvent(expense_mean, expense_sd)
+        # ensure we are working with a ConstantEvent
+        salary = wrapped_constant_param(prefix='banking', name='salary', value=salary, require_lower_bound=0.0)
+
+        # Daily expense model
+        daily_normal_expense = ClipEvent(NormalEvent(expense_mean, expense_sd), min_value=0.0)
 
         def aux(t, i, memory):
+            t_next_month = t + pd.DateOffset(months=1)
 
-            actual_payment_day = shift_weekend_and_holidays(pd.Timestamp(t.year, t.month, payment_day),
-                                                            direction='backward')
+            actual_payment_day_cur = shift_weekend_and_holidays(pd.Timestamp(t.year, t.month, payment_day),
+                                                                 direction='backward')
+            actual_payment_day_next = shift_weekend_and_holidays(pd.Timestamp(t_next_month.year, t_next_month.month,
+                                                                              payment_day),
+                                                                    direction='backward')
 
-            if t.date() == actual_payment_day.date():
-                memory['money'] = memory.get('money', 0.0) + salary
+            if t.date() == actual_payment_day_cur:
+                # current month
+                memory['money'] = memory.get('money', 0.0) + salary.execute(t)
+
+            elif t.date() == actual_payment_day_next:
+                # advance for the next month, if applicable
+                memory['money'] = memory.get('money', 0.0) + salary.execute(t)
+
             else:
                 memory['money'] = memory.get('money', 0.0) - daily_normal_expense.execute(t)
 
             return memory['money']
 
+        # The final model
         model = LambdaEvent(aux, sub_events=[daily_normal_expense])
         return model
 

@@ -1,3 +1,7 @@
+# Data is not uploaded
+data/
+
+# IDE
 .idea/
 *.iml
 

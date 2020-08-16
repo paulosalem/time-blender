@@ -5,8 +5,8 @@ import math
 
 from tests.common import AbstractTest
 from time_blender.coordination_events import Piecewise, Choice, SeasonalEvent, Once, PastEvent
-from time_blender.core import Generator, LambdaEvent
-from time_blender.deterministic_events import ConstantEvent, WalkEvent
+from time_blender.core import Generator, ConstantEvent, LambdaEvent
+from time_blender.deterministic_events import WalkEvent
 from time_blender.random_events import NormalEvent, UniformEvent, PoissonEvent
 
 
@@ -30,10 +30,13 @@ class TestPastEvent(AbstractTest):
         data_walk = self.common_model_test(walk)
 
         # The present is greater than the past
-        self.assertTrue((data_walk[0] > data_past_walk[0]).all().values[0])
+        #print(data_walk[0])
+        #print(data_past_walk[0])
+        #self.assertTrue((data_walk[0] > data_past_walk[0]).all().values[0])
+        self.assertTrue((data_walk[0].iloc[:, 0] > data_past_walk[0].iloc[:, 0]).all())
 
         # The difference is 30, since the walk steps 10 and the past event is 3 steps behind.
-        self.assertEquals(set((data_walk[0] - data_past_walk[0]).iloc[10:].values[:, 0]), {30.0})
+        self.assertEquals(set((data_walk[0].iloc[10:, 0] - data_past_walk[0].iloc[10:, 0]).values), {30.0})
 
 
 class TestSeasonalEvent(AbstractTest):

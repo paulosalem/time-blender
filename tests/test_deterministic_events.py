@@ -3,8 +3,8 @@ import pandas as pd
 import numpy as np
 
 from tests.common import AbstractTest
-from time_blender.core import Generator
-from time_blender.deterministic_events import ClockEvent, WaveEvent, ConstantEvent, WalkEvent
+from time_blender.core import Generator, ConstantEvent
+from time_blender.deterministic_events import ClockEvent, WaveEvent, WalkEvent
 
 
 class TestClockEvent(AbstractTest):

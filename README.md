@@ -51,11 +51,12 @@ Main features:
 
 (Even more) experimental features:
 
-  - Learning:  Rudimentary and early support for learning based on probabilistic programming (PP) is provided for some
-               event types. The idea here is that one can learn from real time series in order to be able
+  - Learning:  Rudimentary and early support for learning from observations is provided
+               through black-box parameter optimization 
+               (currently using the [hyperopt](https://hyperopt.github.io/hyperopt/) library). 
+               The idea here is that one can learn from real time series in order to be able
                to generate similar ones automatically. The objective *is not* forecasting, although that might
-               be possible eventually. At present, it is unclear how this aspect will evolve, 
-               including which PP technology will become definitive (PyMC3 is currently used).
+               be possible eventually. At present, it is unclear how this aspect will evolve.
                
 
 Standard models, which work both as examples and as a basic model library, include:

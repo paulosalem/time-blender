@@ -1,7 +1,7 @@
 import numpy as np
 
 from tests.common import AbstractTest
-from time_blender.core import Generator
+from time_blender.core import Generator, ConstantEvent
 from time_blender.deterministic_events import WalkEvent
 from time_blender.random_events import NormalEvent, UniformEvent, PoissonEvent, TopResistance, BottomResistance
 
@@ -56,10 +56,18 @@ class TestNormalEvent(AbstractRandomEventTest):
 
         self.common_model_test(self.event)
 
-    def test_generalize_from_observations(self):
+    def test_generalize_from_observations_1(self):
 
         fresh_data = self.generate_learn_generate(self.generator,
-                                                  NormalEvent(UniformEvent(low=-100.0, high=100.0), 1.0),
+                                                  NormalEvent(10.0, 2.0),
+                                                  self.start_date, self.end_date)
+
+        self.assertClose(np.mean(fresh_data), self.param_1)
+
+    def test_generalize_from_observations_2(self):
+
+        fresh_data = self.generate_learn_generate(self.generator,
+                                                  NormalEvent(UniformEvent(low=-100.0, high=100.0), 2.0),
                                                   self.start_date, self.end_date)
 
         self.assertClose(np.mean(fresh_data), self.param_1)
@@ -86,7 +94,9 @@ class TestPoissonEvent(AbstractRandomEventTest):
     def test_generalize_from_observations(self):
 
         fresh_data = self.generate_learn_generate(self.generator,
-                                                  PoissonEvent(UniformEvent(low=0.0, high=10.0)),
+                                                  PoissonEvent(UniformEvent(low=ConstantEvent(0.0,
+                                                                                              require_lower_bound=0.0),
+                                                                            high=10.0)),
                                                   self.start_date, self.end_date)
 
         self.assertClose(np.mean(fresh_data), self.param_1)

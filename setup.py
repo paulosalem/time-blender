@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(name='time-blender',
-      version='0.1.2',
+      version='0.2.0',
       description='A compositional time series generator.',
       url='https://github.com/paulosalem/time-blender',
       author='Paulo Salem',
@@ -14,6 +14,6 @@ setup(name='time-blender',
             "Operating System :: OS Independent"],
       include_package_data=True,
       install_requires=[
-            'pandas', 'numpy', 'clize', 'pymc3', 'sigtools', 'matplotlib'
+            'pandas', 'numpy', 'clize', 'hyperopt', 'sigtools', 'matplotlib', 'scikit-learn'
       ],
       scripts=['bin/time_blender'])
