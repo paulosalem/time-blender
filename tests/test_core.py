@@ -3,10 +3,10 @@ import copy
 import numpy as np
 
 from tests.common import AbstractTest
-from time_blender.coordination_events import Piecewise
-from time_blender.core import Generator, ConstantEvent
+from time_blender.coordination_events import Piecewise, Replicated, PastEvent
+from time_blender.core import Generator, ConstantEvent, LambdaEvent
 from time_blender.deterministic_events import WalkEvent
-from time_blender.models import BankingModels
+from time_blender.models import BankingModels, ClassicModels
 from time_blender.random_events import NormalEvent, UniformEvent, PoissonEvent, TopResistance, BottomResistance
 
 
@@ -61,3 +61,58 @@ class TestEvent(AbstractTest):
                        t_separators=[t_separator_1, t_separator_2])
 
         res = self.common_model_test(pw)
+
+    def test_clone_2(self):
+        base_event = NormalEvent() + PoissonEvent()
+
+        def aux(t, i, memory, sub_events):
+            res = 2 * sub_events['base'].execute(t)
+            return res
+
+        print(aux.__closure__)
+
+        base_model = LambdaEvent(aux, sub_events={'base': base_event})
+
+        model = Replicated(base_model, NormalEvent(mean=10, std=5), max_replication=2)
+
+        data = self.common_model_test(model, n=2)
+
+        self.assertTrue((data[0].iloc[-10:-1].values != data[1].iloc[-10:-1].values).any())
+
+    def test_clone_3(self):
+        pe = PastEvent(1)
+        event = ConstantEvent(1) + pe
+        pe.refers_to(event)
+
+        self.common_model_test(event)
+
+        # cloning must not break anything
+        cloned_event = event.clone()
+        self.common_model_test(cloned_event)
+
+        self.assertNotEqual(event._causal_parameters[0].name, cloned_event._causal_parameters[0].name)
+
+    def test_constant_generation(self):
+        constant_event_1 = ConstantEvent(10)
+        data_1 = self.common_model_test(constant_event_1, n=2)
+
+        # series generated from a constant must have the same values
+        self.assertTrue((data_1[0].iloc[-10:-1].values == data_1[1].iloc[-10:-1].values).all())
+
+    def test_lambda_composition_generation(self):
+        #
+        # Various composition strategies
+        #
+        events = [NormalEvent(0, 1),
+                  NormalEvent(0, 1)*ConstantEvent(1000),
+                  NormalEvent(0, 1)+ConstantEvent(1000),
+                  NormalEvent(0, 1)-ConstantEvent(1000),
+                  NormalEvent(0, 1)/ConstantEvent(1000)]
+
+        data_sets = [self.common_model_test(e, n=2) for e in events]
+
+        # check each composition behavior
+        for data in data_sets:
+            # different generated data series must have different values
+            #print(data[0].iloc[-10:-1].values, data[1].iloc[-10:-1].values)
+            self.assertFalse((data[0].iloc[-10:-1].values == data[1].iloc[-10:-1].values).all())

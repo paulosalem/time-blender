@@ -36,3 +36,8 @@ def shift_weekend_and_holidays(day, direction='forward', holidays=[]):
         # recursion base
         return day
 
+
+def is_sequence(x):
+    return isinstance(x,(list,pd.Series,np.ndarray))
+
+

@@ -1,7 +1,7 @@
 import unittest
 import pandas as pd
 
-from time_blender.coordination_events import Once, Choice
+from time_blender.coordination_events import OnceEvent, Choice
 from time_blender.core import Generator, LambdaEvent, ConstantEvent
 from time_blender.deterministic_events import WalkEvent, WaveEvent
 from time_blender.random_events import NormalEvent, UniformEvent
@@ -16,13 +16,13 @@ class TestDeterministicEvents(unittest.TestCase):
     def test_composition_1(self):
         e1 = NormalEvent(0.0, 2)
 
-        rw = WalkEvent(0.0, e1)
+        rw = WalkEvent(e1, initial_pos=0.0)
 
-        g = Generator({'rw': rw})
+        g = Generator(start_date=self.begin_date, end_date=self.end_date)
 
-        data = g.generate(self.begin_date, self.end_date, 1)
-        print(data[0])
-        self.assertEqual(len(data[0]), self.days)
+        data = g.generate({'rw': rw})
+        print(data)
+        self.assertEqual(len(data), self.days)
 
     def test_composition_2(self):
         norm = NormalEvent(0, 1)
@@ -30,30 +30,28 @@ class TestDeterministicEvents(unittest.TestCase):
 
         compos = norm + we
 
-        data = Generator([compos]).generate(self.begin_date, self.end_date, 1)
-        print(data[0])
-        self.assertEqual(len(data[0]), self.days)
+        data = Generator(start_date=self.begin_date, end_date=self.end_date).generate([compos])
+        self.assertEqual(len(data), self.days)
 
     def test_composition_3(self):
         const = ConstantEvent(4)
         norm = NormalEvent(0, 1)
         we = WaveEvent(30, 3)
-        t_change = Once(UniformEvent(0, 90))
+        t_change = OnceEvent(UniformEvent(0, 90))
 
         compos1 = we + norm
         compos2 = const + norm
 
-        def aux(t, i, memory):
-            if i <= t_change.execute(t):
-                return compos1.execute(t)
+        def aux(t, i, memory, sub_events):
+            if i <= sub_events['t_change'].execute(t):
+                return sub_events['compos1'].execute(t)
             else:
-                return compos2.execute(t)
+                return sub_events['compos2'].execute(t)
 
-        e = LambdaEvent(aux, sub_events=[compos1, compos2])
+        e = LambdaEvent(aux, sub_events={'t_change': t_change, 'compos1': compos1, 'compos2': compos2})
 
-        data = Generator([e]).generate(self.begin_date, self.end_date, 1)
-        df = data[0]
-        print(df)
+        data = Generator(start_date=self.begin_date, end_date=self.end_date).generate([e])
+        df = data
         self.assertEqual(len(df), self.days)
 
     def test_composition_4(self):
@@ -65,6 +63,5 @@ class TestDeterministicEvents(unittest.TestCase):
 
         chc = Choice([compos1, compos2])
 
-        data = Generator([chc]).generate(self.begin_date, self.end_date, 1)
-        print(data[0])
-        self.assertEqual(len(data[0]), self.days)
+        data = Generator(start_date=self.begin_date, end_date=self.end_date).generate([chc])
+        self.assertEqual(len(data), self.days)

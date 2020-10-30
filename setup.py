@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(name='time-blender',
-      version='0.2.0',
+      version='0.3.0',
       description='A compositional time series generator.',
       url='https://github.com/paulosalem/time-blender',
       author='Paulo Salem',

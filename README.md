@@ -89,14 +89,13 @@ provided and allows access to pre-defined models.
 
 ### Programmatic Use
 
-A Jupyter notebook is provided with many examples on how to use TimeBlender. Here, let us take a look at some simple
+Jupyter notebooks are provided with many examples on how to use TimeBlender. Here, let us take a look at some simple
 examples. 
 
 The following would generate a wave of period 30 and amplitude 3, summed with normal noise of mean 0 and standard 
 deviation 1:
 
 ```python
-  import pandas as pd
   from time_blender.core import *
   from time_blender.random_events import *
   from time_blender.deterministic_events import *
@@ -107,20 +106,21 @@ deviation 1:
   
   compos = norm + we
   
-  data = Generator(model).generate(pd.Timestamp(2018, 1, 1),  pd.Timestamp(2018, 31, 1), n=1)
+  data = generate(compos, pd.Timestamp(2018, 1, 1),  pd.Timestamp(2018, 31, 1), n=1)
   
-  # data[0] contains the generated series.
+  # data contains the generated series.
 ```
 
 Some models are predefined for convenience. For instance, a random ARMA(4, 2) model can be defined as:
 
 ```python
+  from time_blender.core import *
   from time_blender.models import ClassicModels
   
   model = ClassicModels.arma(4, 2)
-  data = Generator(model).generate(pd.Timestamp(2018, 1, 1),  pd.Timestamp(2018, 31, 1), n=1)
+  data = generate(model, pd.Timestamp(2018, 1, 1),  pd.Timestamp(2018, 31, 1), n=1)
   
-  # data[0] contains the generated series.
+  # data contains the generated series.
 
 ```
 

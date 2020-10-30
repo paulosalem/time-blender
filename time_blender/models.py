@@ -2,10 +2,11 @@
 import numpy as np
 import pandas as pd
 
-from time_blender.coordination_events import PastEvent
-from time_blender.core import LambdaEvent, ConstantEvent, wrapped_constant_param
+from time_blender.coordination_events import PastEvent, CumulativeEvent, ParentValueEvent, TemporarySwitch, Choice, \
+    SeasonalEvent
+from time_blender.core import LambdaEvent, ConstantEvent, wrapped_constant_param, Event, Invariant
 from time_blender.deterministic_events import WaveEvent, ClockEvent, WalkEvent, IdentityEvent, ClipEvent
-from time_blender.random_events import NormalEvent
+from time_blender.random_events import NormalEvent, wrap_in_resistance, BernoulliEvent, PoissonEvent
 
 from clize import Parameter
 
@@ -19,7 +20,7 @@ class SimpleModels:
     @cli_model
     def cycle(base:float=10.0, period:float=72, growth_rate:float=2):
 
-        period_fluctuation = WalkEvent(period, NormalEvent(0, 1))
+        period_fluctuation = WalkEvent(NormalEvent(0, 1), initial_pos=period, capture_parent_value=False)
         amplitude_trend = ClockEvent() * ConstantEvent(base) * NormalEvent(3, 1)
         we = WaveEvent(period_fluctuation, amplitude_trend)
 
@@ -33,7 +34,7 @@ class ClassicModels:
     @staticmethod
     @cli_model
     def ar(p: int, *, constant: float=0, error_mean: float=0, error_std: float=1, coefs_low: float=-1, coefs_high: float=1,
-           coefs: a_list=None, error_event: Parameter.IGNORE=None):
+           coefs: a_list=None, error_event: Parameter.IGNORE=None, capture_parent_value=True):
         """
         Creates a new AR (autoreressive) model. The model's coeficients can either be generated automatically
         by providing coefs_low and coefs_high parameters, or be explicitly defined by providing a list in the
@@ -51,6 +52,9 @@ class ClassicModels:
                       element (if list) or key (if dict) correspond to the i-th coeficient.
                       If this is specified, coefs_low and coefs_high are ignored.
         :param error_event: An error event. If specified, it is used instead of error_mean and error_std.
+        :capture_parent_value: Whether the parent value should be used as the new current value to which
+                               the event's execution is added. This is useful to embed the present event
+                               into larger contexts and accumulate on top of their feedback.
         :return: An AR model.
         """
 
@@ -64,9 +68,15 @@ class ClassicModels:
 
         # Start with the model's constant.
         if error_event is not None:
-            x = ConstantEvent(constant, parallel_events=[error_event])
+            if not isinstance(constant, Event):
+                x = ConstantEvent(constant, parallel_events=[error_event])
+            else:
+                x = constant.parallel_to(error_event)
         else:
-            x = ConstantEvent(constant)
+            if not isinstance(constant, Event):
+                x = ConstantEvent(constant)
+            else:
+                x = constant
 
         past = []
 
@@ -78,20 +88,24 @@ class ClassicModels:
             else:
                 alpha = np.random.uniform(coefs_low, coefs_high)
 
-            p = PastEvent(i + 1)
-            past.append(p)
+            pe = PastEvent(i + 1, allow_learning=False)
+            past.append(pe)
 
             if error_event is not None:
-                error = PastEvent(i)
+                error = PastEvent(i, allow_learning=False)
                 error.refers_to(error_event)
             else:
                 error = NormalEvent(error_mean, error_std)
 
-            x = x + p * ConstantEvent(alpha) + error
+            x = x + pe * ConstantEvent(alpha) + error
 
         # connect past events to the series to which they refer to
-        for p in past:
-            p.refers_to(x)
+        for pe in past:
+            if capture_parent_value:
+                pe.refers_to(ParentValueEvent(x))
+
+            else:
+                pe.refers_to(x)
 
         return x
 
@@ -141,7 +155,7 @@ class ClassicModels:
             else:
                 alpha = np.random.uniform(coefs_low, coefs_high)
 
-            p = PastEvent(i + 1)
+            p = PastEvent(i + 1, allow_learning=False)
             past.append(p)
             x = x + p * ConstantEvent(alpha)
 
@@ -155,7 +169,8 @@ class ClassicModels:
     @cli_model
     def arma(p, q, constant: float=0, error_mean: float=0, error_std: float=1,
              ar_coefs_low: float=-1, ar_coefs_high: float=1, ar_coefs: a_list=None,
-             ma_coefs_low: float=-1, ma_coefs_high: float=1, ma_coefs: a_list=None):
+             ma_coefs_low: float=-1, ma_coefs_high: float=1, ma_coefs: a_list=None,
+             capture_parent_value=True):
         """
         Creates an ARMA model. This differs slightly from simply summing AR and MA models, because here a common
         normal error series is also provided
@@ -171,6 +186,7 @@ class ClassicModels:
         :param ma_coefs_low:
         :param ma_coefs_high:
         :param ma_coefs:
+        :param capture_parent_value:
         :return:
         """
 
@@ -178,50 +194,180 @@ class ClassicModels:
         error_event = NormalEvent(error_mean, error_std)
 
         m1 = ClassicModels.ar(p, constant=constant, coefs_low=ar_coefs_low, coefs_high=ar_coefs_high, coefs=ar_coefs,
-                error_event=error_event)
+                error_event=error_event, capture_parent_value=capture_parent_value)
 
         m2 = ClassicModels.ma(q, series_mean=0.0, coefs_low=ma_coefs_low, coefs_high=ma_coefs_high, coefs=ma_coefs,
                 error_event=error_event)
 
         return m1 + m2
 
+    @staticmethod
+    @cli_model
+    def arima(p, q, constant: float=0, error_mean: float=0, error_std: float=1,
+             ar_coefs_low: float=-1, ar_coefs_high: float=1, ar_coefs: a_list=None,
+             ma_coefs_low: float=-1, ma_coefs_high: float=1, ma_coefs: a_list=None,
+             capture_parent_value=True):
+        """
+        Creates an ARIMA model. This adds the integration not found in ARMA. That is to say, values are accumulated
+        over time.
+
+        :param p:
+        :param q:
+        :param constant:
+        :param error_mean:
+        :param error_std:
+        :param ar_coefs_low:
+        :param ar_coefs_high:
+        :param ar_coefs:
+        :param ma_coefs_low:
+        :param ma_coefs_high:
+        :param ma_coefs:
+        :param capture_parent_value:
+        :return:
+        """
+
+        return CumulativeEvent(\
+                    ClassicModels.arma(p=p, q=1, constant=constant, error_mean=error_mean, error_std=error_std,
+                                       ar_coefs_low=ar_coefs_low, ar_coefs_high=ar_coefs_high, ar_coefs=ar_coefs,
+                                       ma_coefs_low=ma_coefs_low, ma_coefs_high=ma_coefs_high, ma_coefs=ma_coefs,
+                                       capture_parent_value=capture_parent_value))
+
 
 class BankingModels:
 
+    # TODO put newer version here
+
     @staticmethod
     @cli_model
-    def salary_earner(salary=5000, payment_day: int=1, *, expense_mean=100.0, expense_sd=300.0):
+    def salary_earner(salary_value=20000, payment_day: int=1, *,
+                      regular_expense_mean=50, regular_expense_std=10,
+                      large_expense_mean=1000, large_expense_std=100,
+                      emergency_probability=0.1, emergencies_mean=500, emergencies_std=100):
+        ##########################################
+        # Job parameters
+        ##########################################
+        salary = ConstantEvent(salary_value, name='salary',
+                               require_lower_bound=0.0,
+                               learning_normal_std = 5000)
+
+        payday = ConstantEvent(payment_day, name='payday', allow_learning=False)
+
+        ########################################
+        # Daily life
+        ########################################
+        typical_daily_cashflow = SeasonalEvent(salary, day=payday, fill_with_previous=False)
+
+        # regular expenses
+        typical_daily_cashflow -= ClipEvent(NormalEvent(regular_expense_mean, regular_expense_std),
+                                            min_value=ConstantEvent(0.0, allow_learning=False))
+
+        # large expenses
+        typical_daily_cashflow -= ClipEvent(PoissonEvent(1)*NormalEvent(regular_expense_mean, regular_expense_std),
+                                            min_value=ConstantEvent(0.0, allow_learning=False))
+
+        # emergencies
+        typical_daily_cashflow -= ClipEvent(BernoulliEvent(emergency_probability) * NormalEvent(emergencies_mean,
+                                                                                                emergencies_std),
+                                            min_value=ConstantEvent(0.0, allow_learning=False))
+
+        # investments
+        investment_base_mean = salary_value*0.025
+        investment_base_std = salary_value*0.0012
+        typical_daily_cashflow -= ClipEvent(Choice([ConstantEvent(0),
+                                                    NormalEvent(investment_base_mean, investment_base_std),
+                                                    NormalEvent(2*investment_base_mean, 2*investment_base_std),
+                                                    NormalEvent(4*investment_base_mean, 4*investment_base_std)],
+                                                   fix_choice=True),
+                                            min_value=ConstantEvent(0.0, allow_learning=False))
+
+        # cyclic residual
+        typical_daily_cashflow -= WaveEvent(180, salary_value/100)
+
+        non_payday_process = TemporarySwitch(typical_daily_cashflow,
+                                             ConstantEvent(0.0, allow_learning=False),
+                                             switch_duration=ConstantEvent(10, learning_normal_std=2))
+
+        def aux_daily_cashflow(t, i, memory, sub_events):
+
+            # ensures that on payday there is no temporary switch
+            if t.day == sub_events['payday'].execute(t):
+                flow = sub_events['typical_daily_cashflow'].execute(t)
+            else:
+                flow = sub_events['non_payday_process'].execute(t)
+
+            return sub_events['parent_value'].execute(t) + flow
+
+
+        parent_value = ParentValueEvent(default=0)
+
+        x = LambdaEvent(aux_daily_cashflow, sub_events={'payday': payday,
+                                                        'typical_daily_cashflow': typical_daily_cashflow,
+                                                        'non_payday_process': non_payday_process,
+                                                        'parent_value': parent_value})
+
+        x = wrap_in_resistance(x,
+                               top_resistance_levels=[3*salary_value],
+                               bottom_resistance_levels=[-salary_value],
+                               top_resistance_strength_event=ClipEvent(NormalEvent(0.1, 0.05), min_value=0.0),
+                               bottom_resistance_strength_event=ClipEvent(NormalEvent(2, 1), min_value=0.0),
+                               tolerance=salary_value,
+                               top_resistance_probability=0.99,
+                               bottom_resistance_probability=0.99)
+
+        ##########################
+        # Invariants
+        ##########################
+
+        invariant_1 = Invariant(lambda t, events: events['salary'].execute(t) >= 10000,
+                                events={'salary': salary})
+
+        x.add_invariant(invariant_1)
+
+        salary_earner_model = x
+        #salary_earner_model = Replicated(x,
+        #                                 duration_per_replication=NormalEvent(mean=360, std=90, allow_learning=False),
+        #                                 max_replication=3)
+
+        return salary_earner_model
+
+
+    @staticmethod
+    @cli_model
+    def salary_earner_simple(salary_value=5000, payment_day: int=1, *, expense_mean=100.0, expense_sd=300.0):
 
         # ensure we are working with a ConstantEvent
-        salary = wrapped_constant_param(prefix='banking', name='salary', value=salary, require_lower_bound=0.0)
+        salary = wrapped_constant_param(prefix='banking', name='salary', value=salary_value, require_lower_bound=0.0)
 
         # Daily expense model
         daily_normal_expense = ClipEvent(NormalEvent(expense_mean, expense_sd), min_value=0.0)
 
-        def aux(t, i, memory):
+        def aux(t, i, memory, sub_events):
             t_next_month = t + pd.DateOffset(months=1)
 
-            actual_payment_day_cur = shift_weekend_and_holidays(pd.Timestamp(t.year, t.month, payment_day),
+            actual_payment_day_cur = shift_weekend_and_holidays(pd.Timestamp(t.year, t.month,
+                                                                             sub_events['payment_day']),
                                                                  direction='backward')
             actual_payment_day_next = shift_weekend_and_holidays(pd.Timestamp(t_next_month.year, t_next_month.month,
-                                                                              payment_day),
+                                                                              sub_events['payment_day']),
                                                                     direction='backward')
 
             if t.date() == actual_payment_day_cur:
                 # current month
-                memory['money'] = memory.get('money', 0.0) + salary.execute(t)
+                memory['money'] = memory.get('money', 0.0) + sub_events['salary'].execute(t)
 
             elif t.date() == actual_payment_day_next:
                 # advance for the next month, if applicable
-                memory['money'] = memory.get('money', 0.0) + salary.execute(t)
+                memory['money'] = memory.get('money', 0.0) + sub_events['salary'].execute(t)
 
             else:
-                memory['money'] = memory.get('money', 0.0) - daily_normal_expense.execute(t)
+                memory['money'] = memory.get('money', 0.0) - sub_events['daily_normal_expense'].execute(t)
 
             return memory['money']
 
         # The final model
-        model = LambdaEvent(aux, sub_events=[daily_normal_expense])
+        model = LambdaEvent(aux, sub_events={'salary': salary,
+                                             'daily_normal_expense': daily_normal_expense,
+                                             'payment_day': payment_day})
         return model
 
 
@@ -242,7 +388,7 @@ class EconomicModels:
         :return:
         """
         we = WaveEvent(wave_period, wave_amplitude)
-        return WalkEvent(base, NormalEvent(growth_mean, growth_sd)) * (ConstantEvent(1) + we)
+        return WalkEvent(NormalEvent(growth_mean, growth_sd), initial_pos=base) * (ConstantEvent(1) + we)
 
 
 class EcologyModels:
@@ -270,8 +416,8 @@ class EcologyModels:
         # preys     = alpha*preys           - beta*preys*predators
         # predators = delta*preys*predators - gamma*predators
 
-        past_preys = PastEvent(1, undefined_value=n_preys, name='Past Preys')
-        past_predators = PastEvent(1, undefined_value=n_predators, name='Past Predators')
+        past_preys = PastEvent(1, undefined_value=n_preys, name='Past Preys', allow_learning=False)
+        past_predators = PastEvent(1, undefined_value=n_predators, name='Past Predators', allow_learning=False)
 
         preys = ClipEvent((ConstantEvent(alpha) * past_preys - ConstantEvent(beta)*past_preys*past_predators),
                           min_value=0.0,
